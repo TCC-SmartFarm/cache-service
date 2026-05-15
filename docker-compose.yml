@@ -1,0 +1,11 @@
+cache-service:
+    build: .
+    container_name: cache-service
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      - rabbitmq
+      - redis
+    networks:
+      - smartfarm-network
