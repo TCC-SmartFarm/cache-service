@@ -22,14 +22,14 @@ type IncomingMessage struct {
 var ctx = context.Background()
 
 func main() {
-	// 1. Configurações via Variáveis de Ambiente
+	// Configurações via Variáveis de Ambiente
 	rabbitURL := os.Getenv("RABBIT_URL")
 	redisAddr := os.Getenv("REDIS_ADDR")
 
 	log.Printf("Tentando conectar no Redis em: %s", redisAddr)
     log.Printf("Tentando conectar no RabbitMQ em: %s", rabbitURL)
 
-    // 2. Conectar ao Redis
+    // Conectar ao Redis
     rdb := redis.NewClient(&redis.Options{
         Addr: redisAddr,
     })
@@ -41,7 +41,7 @@ func main() {
     log.Println("Conectado ao Redis")
 
 
-	// 3. Conectar ao RabbitMQ
+	// Conectar ao RabbitMQ
 	var conn *amqp.Connection
     var err error
     url := "amqp://admin:admin@barramento-de-eventos:5672/" 
@@ -53,7 +53,7 @@ func main() {
         if err == nil {
             break
         }
-        log.Printf("Aguardando RabbitMQ iniciar... %v", err)
+        log.Printf("Aguardando RabbitMQ iniciar.%v", err)
         time.Sleep(5 * time.Second) // Espera 5 segundos para a próxima tentativa
     }
 
@@ -67,32 +67,48 @@ func main() {
     }
 
 
-	// 1. Garante que a Exchange existe
+	// Garante que a Exchange existe
 	err = ch.ExchangeDeclare("telemetria_exchange", "topic", true, false, false, false, nil)
 
-	// 2. Cria uma fila temporária EXCLUSIVA para o Cache-Service
+	// Cria uma fila temporária EXCLUSIVA para o Cache-Service
 	// O nome vazio "" faz o RabbitMQ gerar um nome tipo amq.gen-XXXX
 	q, err := ch.QueueDeclare("", false, false, true, false, nil)
 
-	// 3. O BINDING: Vincula a sua fila temporária à Exchange de tópicos
+	// O BINDING: Vincula a sua fila temporária à Exchange de tópicos
 	// Usando "sensor.#", qualquer mensagem de qualquer sensor cairá aqui
 	err = ch.QueueBind(q.Name, "sensor.#", "telemetria_exchange", false, nil)
 
-	// 4. CONSUMO: Agora consumimos da fila que acabamos de vincular
+	// CONSUMO: Agora consumimos da fila que acabamos de vincular
 	msgs, err := ch.Consume(q.Name, "cache-service", true, false, false, false, nil)
 
 	log.Printf("[*] Cache-Service conectado à exchange. Ouvindo: %s", q.Name)
 
 	for d := range msgs {
-		var msg IncomingMessage
-		if err := json.Unmarshal(d.Body, &msg); err != nil {
-			continue
-		}
+        var msg IncomingMessage
+        if err := json.Unmarshal(d.Body, &msg); err != nil {
+            continue
+        }
 
-		// Salva no Redis usando o padrão que combinamos
-		cacheKey := fmt.Sprintf("userId:%s:deviceId:%s:latest", msg.UserId, msg.DeviceId)
-		rdb.Set(ctx, cacheKey, d.Body, 24*time.Hour)
-		
-		log.Printf("Cache atualizado via Exchange: %s", cacheKey)
-	}
+        // a chave (removi o ":latest" pois agora é uma lista/histórico curto)
+        cacheKey := fmt.Sprintf("userId:%s:deviceId:%s:history", msg.UserId, msg.DeviceId)
+
+        // Pipeline para garantir atomicidade (executa os dois comandos juntos)
+        pipe := rdb.Pipeline()
+
+        // Adiciona a nova mensagem no início da lista (Left Push)
+        pipe.LPush(ctx, cacheKey, d.Body)
+
+        // Corta a lista para manter apenas os índices de 0 a 19 (total 20 itens)
+        pipe.LTrim(ctx, cacheKey, 0, 19)
+
+        // Define ou renova o TTL para 720 horas (30 dias) a cada nova leitura
+        pipe.Expire(ctx, cacheKey, 720*time.Hour)
+
+        _, err := pipe.Exec(ctx)
+        if err != nil {
+            log.Printf("Erro ao atualizar cache circular: %v", err)
+        } else {
+            log.Printf("Cache circular atualizado: %s (Buffer: 20)", cacheKey)
+        }
+    }
 }
