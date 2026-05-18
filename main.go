@@ -16,6 +16,7 @@ import (
 type IncomingMessage struct {
 	UserId   string      `json:"userId"`
 	DeviceId string      `json:"deviceId"`
+    Name     string      `json:"name"`
 	Payload  interface{} `json:"payload"`
 }
 
