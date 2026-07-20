@@ -14,6 +14,7 @@ import (
 
 // Estrutura para podermos extrair o ApplicationId e DevAddr do JSON que vem da fila
 type IncomingMessage struct {
+    UserId string      `json:"userId"`
 	ApplicationId   string      `json:"applicationId"`
 	DevAddr string      `json:"devAddr"`
     DevEUI     string      `json:"devEUI"`
@@ -91,7 +92,7 @@ func main() {
         }
 
         // a chave (removi o ":latest" pois agora é uma lista/histórico curto)
-        cacheKey := fmt.Sprintf("applicationId:%s:devEUI:%s:history", msg.ApplicationId, msg.DevEUI)
+        cacheKey := fmt.Sprintf("userId:%s:devEUI:%s:history", msg.UserId, msg.DevEUI)
 
         // Pipeline para garantir atomicidade (executa os dois comandos juntos)
         pipe := rdb.Pipeline()
