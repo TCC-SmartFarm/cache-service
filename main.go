@@ -31,9 +31,11 @@ func main() {
 	log.Printf("Tentando conectar no Redis em: %s", redisAddr)
     log.Printf("Tentando conectar no RabbitMQ em: %s", rabbitURL)
 
-    // Conectar ao Redis
+    // Conectar ao Redis. Exige senha porque o Redis passou a escutar no IP privado
+    // da VM (para ser alcançável pelo Container Apps), e não só na rede do compose.
     rdb := redis.NewClient(&redis.Options{
-        Addr: redisAddr,
+        Addr:     redisAddr,
+        Password: os.Getenv("REDIS_PASSWORD"),
     })
     
     // Testar conexão com Redis (contexto adicionado para o Ping)
