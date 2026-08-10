@@ -18,7 +18,19 @@ type IncomingMessage struct {
 	ApplicationId   string      `json:"applicationId"`
 	DevAddr string      `json:"devAddr"`
     DevEUI     string      `json:"devEUI"`
+	// O mqtt-sub que lê do broker próprio ainda chama este campo de "deviceId".
+	// Aceitar os dois nomes evita que a troca de um serviço derrube a ingestão.
+	DeviceId string      `json:"deviceId"`
 	Payload  interface{} `json:"payload"`
+}
+
+// deviceKey devolve o identificador do dispositivo qualquer que seja o nome do
+// campo no envelope: devEUI (network server LoRa) ou deviceId (broker próprio).
+func (m IncomingMessage) deviceKey() string {
+	if m.DevEUI != "" {
+		return m.DevEUI
+	}
+	return m.DeviceId
 }
 
 var ctx = context.Background()
@@ -79,8 +91,15 @@ func main() {
 	q, err := ch.QueueDeclare("", false, false, true, false, nil)
 
 	// O BINDING: Vincula a sua fila temporária à Exchange de tópicos
-	// Usando "device.#", qualquer mensagem de qualquer device cairá aqui
+	// Usando "device.#", qualquer mensagem de qualquer device cairá aqui.
 	err = ch.QueueBind(q.Name, "device.#", "telemetria_exchange", false, nil)
+
+	// Segundo binding para "sensor.#": é o prefixo que o mqtt-sub gera quando lê
+	// do broker próprio (o tipo vem do tópico). Sem ele, trocar só o cache-service
+	// faz a fila ficar vazia e a ingestão para em silêncio.
+	if err == nil {
+		err = ch.QueueBind(q.Name, "sensor.#", "telemetria_exchange", false, nil)
+	}
 
 	// CONSUMO: Agora consumimos da fila que acabamos de vincular
 	msgs, err := ch.Consume(q.Name, "cache-service", true, false, false, false, nil)
@@ -94,7 +113,12 @@ func main() {
         }
 
         // a chave (removi o ":latest" pois agora é uma lista/histórico curto)
-        cacheKey := fmt.Sprintf("userId:%s:devEUI:%s:history", msg.UserId, msg.DevEUI)
+        devEUI := msg.deviceKey()
+        if devEUI == "" {
+            log.Printf("Mensagem sem devEUI/deviceId, ignorada")
+            continue
+        }
+        cacheKey := fmt.Sprintf("userId:%s:devEUI:%s:history", msg.UserId, devEUI)
 
         // Pipeline para garantir atomicidade (executa os dois comandos juntos)
         pipe := rdb.Pipeline()
