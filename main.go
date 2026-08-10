@@ -12,11 +12,12 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Estrutura para podermos extrair o UserId e DeviceId do JSON que vem da fila
+// Estrutura para podermos extrair o ApplicationId e DevAddr do JSON que vem da fila
 type IncomingMessage struct {
-	UserId   string      `json:"userId"`
-	DeviceId string      `json:"deviceId"`
-    Name     string      `json:"name"`
+    UserId string      `json:"userId"`
+	ApplicationId   string      `json:"applicationId"`
+	DevAddr string      `json:"devAddr"`
+    DevEUI     string      `json:"devEUI"`
 	Payload  interface{} `json:"payload"`
 }
 
@@ -30,9 +31,11 @@ func main() {
 	log.Printf("Tentando conectar no Redis em: %s", redisAddr)
     log.Printf("Tentando conectar no RabbitMQ em: %s", rabbitURL)
 
-    // Conectar ao Redis
+    // Conectar ao Redis. Exige senha porque o Redis passou a escutar no IP privado
+    // da VM (para ser alcançável pelo Container Apps), e não só na rede do compose.
     rdb := redis.NewClient(&redis.Options{
-        Addr: redisAddr,
+        Addr:     redisAddr,
+        Password: os.Getenv("REDIS_PASSWORD"),
     })
     
     // Testar conexão com Redis (contexto adicionado para o Ping)
@@ -76,8 +79,8 @@ func main() {
 	q, err := ch.QueueDeclare("", false, false, true, false, nil)
 
 	// O BINDING: Vincula a sua fila temporária à Exchange de tópicos
-	// Usando "sensor.#", qualquer mensagem de qualquer sensor cairá aqui
-	err = ch.QueueBind(q.Name, "sensor.#", "telemetria_exchange", false, nil)
+	// Usando "device.#", qualquer mensagem de qualquer device cairá aqui
+	err = ch.QueueBind(q.Name, "device.#", "telemetria_exchange", false, nil)
 
 	// CONSUMO: Agora consumimos da fila que acabamos de vincular
 	msgs, err := ch.Consume(q.Name, "cache-service", true, false, false, false, nil)
@@ -91,7 +94,7 @@ func main() {
         }
 
         // a chave (removi o ":latest" pois agora é uma lista/histórico curto)
-        cacheKey := fmt.Sprintf("userId:%s:deviceId:%s:history", msg.UserId, msg.DeviceId)
+        cacheKey := fmt.Sprintf("userId:%s:devEUI:%s:history", msg.UserId, msg.DevEUI)
 
         // Pipeline para garantir atomicidade (executa os dois comandos juntos)
         pipe := rdb.Pipeline()
